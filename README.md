@@ -1,96 +1,80 @@
 # Simple DBMS
 
-Упрощенная реляционная СУБД на Java 17 с хранением данных на диске, B-Tree индексами, журналом предзаписи (WAL), проверкой внешних ключей и двумя интерфейсами - консольным и Swing.
+Упрощенная реляционная СУБД на Java 17 с хранением таблиц на диске в формате JSON, B-Tree индексами, журналом предзаписи (WAL), проверкой внешних ключей, консольной оболочкой и окном на Swing.
 
-## Возможности
+## Состояние репозитория
 
-Система поддерживает пять типов столбцов: `INT` (`Long`), `DOUBLE` (`Double`), `VARCHAR` (`String`), `DATE` (ISO-8601 `YYYY-MM-DD`) и `BOOLEAN` (`true`/`false`). При создании таблиц можно задавать ограничения `PRIMARY KEY`, `NOT NULL` и внешние ключи `REFERENCES <table>(<column>)`.
+Сейчас сюда загружена первая часть проекта (15 файлов Даниила Егорова): `pom.xml`, `.gitignore`, `README.md` и три базовых пакета (`model`, `storage`, `repository`) с моделью таблиц, сериализацией в JSON, восстановлением из `wal.log` и управлением схемами. Парсер SQL, B-Tree индекс, движок выполнения запросов, консольный режим, Swing-интерфейс и набор из 49 тестов JUnit 5 (остальные 38 файлов) заливают Егор Глазов и Максим Жулин. До их коммитов полная сборка через `mvn clean package` здесь не завершится, так как класс точки входа `Main` находится в третьей части.
 
-Из SQL-команд доступны:
-- DDL: `CREATE TABLE [IF NOT EXISTS]`, `DROP TABLE [IF EXISTS]`, `CREATE INDEX [IF NOT EXISTS] ... ON ...`, `DROP INDEX [IF EXISTS]`;
-- DML: `INSERT INTO` (по одной строке, с явным списком столбцов или пачкой через запятую), `SELECT` (`*` или выбранные столбцы), `UPDATE ... SET ... WHERE`, `DELETE FROM ... WHERE`;
-- фильтрация `WHERE`: операторы `=`, `!=`, `<>`, `>`, `>=`, `<`, `<=`, `IS NULL`, `IS NOT NULL`, логические связки `AND` и `OR` с учетом приоритета и скобок `(...)`, а также однострочные комментарии `--`;
-- служебные запросы: `SHOW TABLES`, `SHOW INDEXES [FROM|IN <table>]`, `DESCRIBE <table>` / `DESC <table>` и `EXPLAIN SELECT ...`.
+## Возможности системы
 
-Таблицы, схемы и индексы сериализуются через Jackson в каталог `data/` с записью через временные файлы `*.tmp.*` и атомарным переименованием. Операции изменения фиксируются в журнале `wal.log`. При запуске после сбоя система удаляет оборванные временные файлы, читает журнал (пропуская поврежденный хвост) и сверяет индексы с таблицами. Для ускорения запросов по индексированным столбцам используется B-дерево (`BTreeIndex`).
+СУБД хранит таблицы, схемы и индексы в отдельных JSON-файлах внутри рабочего каталога (по умолчанию `./data`). Для столбцов доступны пять типов: `INT`, `DOUBLE`, `VARCHAR`, `DATE` (формат `YYYY-MM-DD`) и `BOOLEAN`.
+
+Поддерживаемые конструкции SQL-подобного языка:
+
+- создание и удаление таблиц через `CREATE TABLE` с указанием `PRIMARY KEY`, `NOT NULL` и внешнего ключа `REFERENCES <таблица>(<столбец>)`, а также `DROP TABLE`
+- построение и удаление индексов командами `CREATE INDEX <имя> ON <таблица> (<столбец>)` и `DROP INDEX <имя>` с сохранением дерева на диск
+- вставка одной или нескольких строк через `INSERT INTO` с полным или частичным списком столбцов и проверкой уникальности первичного ключа
+- выборка через `SELECT`, изменение строк через `UPDATE` и удаление через `DELETE` с условиями `WHERE` (`=`, `!=`, `<>`, `<`, `<=`, `>`, `>=`, `IS NULL`, `IS NOT NULL`, связки `AND` и `OR`, скобки)
+- просмотр выбранного плана выполнения (`SeqScan` или `IndexScan`) командой `EXPLAIN SELECT ...`, а также `SHOW TABLES`, `SHOW INDEXES` и `DESCRIBE <таблица>`
+
+Перед изменением таблицы на диске операция пишется в журнал `wal.log`. Если процесс оборвется до сброса буфера, при следующем запуске движок дочитает незавершенные записи из журнала, сверит и пересчитает индексы и вернет таблицы в согласованное состояние. На 10 000 строках поиск по B-Tree индексу в контрольном замере оказался в 18.25 раза быстрее полного перебора (`0.0333 ms` против `0.6077 ms`).
 
 ## Сборка и запуск
 
-Для работы требуются JDK 17+ и Apache Maven 3.8+.
-
-Сборка исполняемого JAR с зависимостями и прогон тестов:
+После появления в репозитории всех модулей проект собирается стандартными командами Maven:
 
 ```bash
 mvn clean package
-```
-
-Генерация документации Javadoc:
-
-```bash
 mvn javadoc:javadoc
 ```
 
-Запуск интерактивной консоли (данные по умолчанию сохраняются в `./data`):
+Запуск консольной оболочки с исполняемого JAR:
 
 ```bash
 java -jar target/simple-dbms-1.0.0.jar
 ```
 
-Дополнительные флаги запуска:
+Доступные ключи командной строки:
 
-```bash
-# Указать свой каталог для хранения базы
-java -jar target/simple-dbms-1.0.0.jar --data ./my_data
-
-# Открыть графический интерфейс Swing
-java -jar target/simple-dbms-1.0.0.jar --gui
-
-# Создать демонстрационные таблицы manufacturers и cars и сразу выйти
-java -jar target/simple-dbms-1.0.0.jar --init-demo
-
-# Запустить сравнение скорости SeqScan и B-Tree IndexScan
-java -jar target/simple-dbms-1.0.0.jar --benchmark
-```
+| Флаг | Назначение |
+| --- | --- |
+| `--data <dir>`, `-d` | Указывает каталог хранения JSON-файлов и `wal.log` (по умолчанию `./data`) |
+| `--gui`, `-g` | Запускает графический интерфейс на Swing вместо консоли |
+| `--init-demo` | Создает демонстрационные таблицы `manufacturers` и `cars` с индексом и стартовыми записями |
+| `--benchmark`, `-b` | Прогоняет замер скорости поиска без индекса и по B-Tree на 500, 2000, 5000 и 10 000 строках |
 
 ## Работа в консоли и примеры SQL
 
-Помимо SQL, в консоли есть служебные команды (точку с запятой после них ставить не обязательно):
-- `help` показывает справку по SQL и командам REPL;
-- `init-demo` создает демонстрационные таблицы `manufacturers` и `cars`;
-- `tables` выводит список таблиц (`SHOW TABLES;`);
-- `indexes` выводит список индексов (`SHOW INDEXES;`);
-- `schema <таблица>` показывает столбцы и ключи таблицы (`DESCRIBE <таблица>;`);
-- `benchmark` запускает тест производительности индексов;
-- `exit` или `quit` сбрасывает контрольную точку WAL и завершает программу.
+В интерактивном режиме доступны семь служебных команд без обязательной `;` на конце: `help` выводит подсказку, `init-demo` создает демо-таблицы, `benchmark` запускает сравнение скорости, `tables` печатает список таблиц, `indexes` показывает все индексы, `schema <таблица>` выводит столбцы и ограничения, а `exit` или `quit` сохраняют контрольную точку WAL и закрывают программу.
 
-SQL-запросы завершаются точкой с запятой `;`:
+Пример сеанса с внешним ключом и индексом:
 
 ```sql
 CREATE TABLE manufacturers (
     id INT PRIMARY KEY,
-    name VARCHAR(100) NOT NULL,
+    name VARCHAR,
     country VARCHAR
 );
 
 CREATE TABLE cars (
     id INT PRIMARY KEY,
-    brand VARCHAR NOT NULL,
+    brand VARCHAR,
     price DOUBLE,
-    is_available BOOLEAN,
-    created_at DATE,
+    in_stock BOOLEAN,
+    released DATE,
     manufacturer_id INT REFERENCES manufacturers(id)
 );
 
 CREATE INDEX idx_cars_brand ON cars (brand);
 
-INSERT INTO manufacturers VALUES (1, 'Toyota Motor Corp', 'Japan');
-INSERT INTO cars VALUES (1, 'Toyota', 25000.0, TRUE, '2024-01-15', 1);
-INSERT INTO cars (id, brand) VALUES (2, 'BMW');
+INSERT INTO manufacturers VALUES (1, 'Toyota', 'Japan'), (2, 'BMW', 'Germany');
+INSERT INTO cars VALUES (1, 'Toyota', 25000.0, TRUE, '2024-03-15', 1);
+INSERT INTO cars (id, brand, manufacturer_id) VALUES (2, 'BMW', 2);
 
 SELECT * FROM cars;
 SELECT brand, price FROM cars WHERE price > 20000;
 EXPLAIN SELECT * FROM cars WHERE brand = 'Toyota';
-
 UPDATE cars SET price = 30000 WHERE id = 2;
 DELETE FROM cars WHERE brand = 'Toyota';
 ```
